@@ -6,7 +6,7 @@ IIS-Hardener-GUI.ps1
 - Adds a Backups tab for restore workflow.
 
 Notes:
-- Some headers (especially CSP / HSTS / X-Frame-Options) can break apps. Keep them optional.
+- Some headers (especially CSP / HTTP Strict Transport Security / X-Frame-Options) can break apps. Keep them optional.
 - Removing the "Server:" header is best done at the reverse proxy/WAF edge.
 #>
 
@@ -42,7 +42,7 @@ function Test-IsAdmin {
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Ensure-AdminOrContinue {
+function Test-AdminOrContinue {
     if (Test-IsAdmin) { return $true }
 
     $msg = "Not running as Administrator. Assessment may work, but hardening actions usually fail.`r`n`r`nDo you want to relaunch as Administrator?"
@@ -55,12 +55,12 @@ function Ensure-AdminOrContinue {
             return $false
         }
 
-        $args = @(
+        $arguments = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-File", "`"$PSCommandPath`""
         )
-        Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs | Out-Null
+        Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs | Out-Null
         return $false
     }
 
@@ -126,12 +126,14 @@ function Invoke-Safe {
 }
 
 function Get-AppCmdPath {
+    # inetsrv is the IIS directory name
     $p = Join-Path $env:windir "System32\inetsrv\appcmd.exe"
     if (Test-Path $p) { return $p }
     return $null
 }
 
 function Test-IISInstalled {
+    # inetsrv is the IIS directory name, appcmd is the IIS command-line tool
     $appcmdOk = Test-Path (Join-Path $env:windir "System32\inetsrv\appcmd.exe")
     if (-not $appcmdOk) { return $false }
     $w3 = Get-Service -Name W3SVC -ErrorAction SilentlyContinue
@@ -146,7 +148,7 @@ function Import-IISModule {
     return $false
 }
 
-function Normalize-Url {
+function ConvertTo-NormalizedUrl {
     param([string]$Url)
     $u = $Url
     if ($null -eq $u) { $u = "" }
@@ -167,7 +169,7 @@ function Normalize-Url {
     }
 }
 
-function Ensure-Collection {
+function ConvertTo-Collection {
     param($Value)
     if ($null -eq $Value) { return @() }
     return $Value
@@ -255,7 +257,7 @@ function Get-IISInventory {
 function Test-SecurityHeaders {
     param([string]$Url)
 
-    $u = Normalize-Url -Url $Url
+    $u = ConvertTo-NormalizedUrl -Url $Url
     if (-not $u) { throw "URL is empty." }
 
     # Allow redirects so we can see headers on the final target in common cases.
@@ -333,7 +335,7 @@ function Remove-CustomHeaderGlobal {
     }
 }
 
-function Ensure-CustomHeaderGlobal {
+function Set-CustomHeaderGlobal {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Value
@@ -404,7 +406,7 @@ function Add-HiddenSegmentsGlobal {
     }
 }
 
-function Ensure-IISW3CLoggingBasics {
+function Set-IIS-W3CLoggingBasics {
     if (-not (Import-IISModule)) { throw "WebAdministration module not available." }
 
     Set-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" `
@@ -456,7 +458,7 @@ function New-AssessmentReport {
     $html += "</ul>"
 
     $html += "<h3>Recent hotfixes</h3><pre>"
-    $recentHotfixes = Ensure-Collection $Patch.RecentHotfixes
+    $recentHotfixes = ConvertTo-Collection $Patch.RecentHotfixes
     foreach ($hf in $recentHotfixes) {
         $dt = if ($hf.InstalledOn) { $hf.InstalledOn.ToString("yyyy-MM-dd") } else { "unknown" }
         $html += ("{0,-12} {1,-12} {2}" -f $hf.HotFixID, $dt, $hf.Description)
@@ -466,7 +468,7 @@ function New-AssessmentReport {
     $html += "<h2>IIS inventory</h2>"
     $html += "<p><b>WebAdministration module:</b> $($IIS.WebAdminModule)</p>"
 
-    $sites = Ensure-Collection $IIS.Sites
+    $sites = ConvertTo-Collection $IIS.Sites
     if ($sites.Count -gt 0) {
         $html += "<h3>Sites</h3><pre>"
         foreach ($s in $sites) {
@@ -476,7 +478,7 @@ function New-AssessmentReport {
         $html += "</pre>"
     }
 
-    $riskFlags = Ensure-Collection $IIS.RiskFlags
+    $riskFlags = ConvertTo-Collection $IIS.RiskFlags
     if ($riskFlags.Count -gt 0) {
         $html += "<h3>Risk flags</h3><ul>"
         foreach ($r in $riskFlags) { $html += "<li>$r</li>" }
@@ -577,10 +579,10 @@ $hardActions = [ordered]@{
     "Disable directory browsing (global)" = { Set-DirectoryBrowsingOffGlobal }
     "Remove 'X-Powered-By' header (global)" = { Remove-CustomHeaderGlobal -Name "X-Powered-By" }
     "Add basic security headers (global)" = {
-        Ensure-CustomHeaderGlobal -Name "X-Content-Type-Options" -Value "nosniff"
-        Ensure-CustomHeaderGlobal -Name "X-Frame-Options" -Value "DENY"
-        Ensure-CustomHeaderGlobal -Name "Referrer-Policy" -Value "no-referrer"
-        Ensure-CustomHeaderGlobal -Name "Permissions-Policy" -Value "geolocation=(), microphone=(), camera=()"
+        Set-CustomHeaderGlobal -Name "X-Content-Type-Options" -Value "nosniff"
+        Set-CustomHeaderGlobal -Name "X-Frame-Options" -Value "DENY"
+        Set-CustomHeaderGlobal -Name "Referrer-Policy" -Value "no-referrer"
+        Set-CustomHeaderGlobal -Name "Permissions-Policy" -Value "geolocation=(), microphone=(), camera=()"
     }
     "Deny HTTP TRACE/TRACK (global)" = {
         Deny-VerbGlobal -Verb "TRACE"
@@ -588,7 +590,7 @@ $hardActions = [ordered]@{
     }
     "Set sane request limits (global)" = { Set-RequestLimitsGlobal -MaxAllowedContentLengthBytes 30000000 -MaxUrl 4096 -MaxQueryString 2048 }
     "Hide common sensitive segments (global)" = { Add-HiddenSegmentsGlobal }
-    "Ensure IIS W3C logging basics (global)" = { Ensure-IISW3CLoggingBasics }
+    "Ensure IIS W3C logging basics (global)" = { Set-IIS-W3CLoggingBasics }
     "Enable IIS-related Windows Event Logs" = { Enable-IISRelatedEventLogs }
 }
 
@@ -700,7 +702,7 @@ $script:BtnAssess.Add_Click({
             $pendingLevel = if ($script:LastPatch.PendingReboot) { "WARN" } else { "OK" }
             Write-Ui "Pending reboot: $($script:LastPatch.PendingReboot)" $pendingLevel
             Write-Ui "Windows Update service: $($script:LastPatch.WindowsUpdateSvc)" "INFO"
-            $recentHotfixes = Ensure-Collection $script:LastPatch.RecentHotfixes
+            $recentHotfixes = ConvertTo-Collection $script:LastPatch.RecentHotfixes
             if ($recentHotfixes.Count -gt 0) {
                 Write-Ui "Recent hotfixes:" "INFO"
                 foreach ($hf in $recentHotfixes) {
@@ -718,7 +720,7 @@ $script:BtnAssess.Add_Click({
             $webAdminLevel = if ($script:LastIIS.WebAdminModule) { "OK" } else { "WARN" }
             Write-Ui "WebAdministration module: $($script:LastIIS.WebAdminModule)" $webAdminLevel
 
-            $sites = Ensure-Collection $script:LastIIS.Sites
+            $sites = ConvertTo-Collection $script:LastIIS.Sites
             if ($sites.Count -gt 0) {
                 Write-Ui "Sites:" "INFO"
                 foreach ($s in $sites) {
@@ -727,7 +729,7 @@ $script:BtnAssess.Add_Click({
                 }
             }
 
-            $riskFlags = Ensure-Collection $script:LastIIS.RiskFlags
+            $riskFlags = ConvertTo-Collection $script:LastIIS.RiskFlags
             if ($riskFlags.Count -gt 0) {
                 Write-Ui "Risk flags:" "WARN"
                 foreach ($r in $riskFlags) { Write-Ui "  - $r" "WARN" }
@@ -845,7 +847,7 @@ Write-Ui "Log: $LogFile" "INFO"
 Write-Ui "Ready." "OK"
 
 # Offer elevation before showing UI
-if (-not (Ensure-AdminOrContinue)) {
+if (-not (Test-AdminOrContinue)) {
     try { Stop-Transcript | Out-Null } catch {}
     return
 }
