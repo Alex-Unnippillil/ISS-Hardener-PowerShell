@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer + Pester
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          Install-Module Pester -Force -Scope CurrentUser
+
+      - name: Lint
+        shell: pwsh
+        run: |
+          Invoke-ScriptAnalyzer -Path .\src\IIS-Hardener-GUI.ps1 -Severity Warning,Error
+
+      - name: Tests
+        shell: pwsh
+        run: |
+          Invoke-Pester -Path .\tests -Output Detailed
