@@ -117,10 +117,10 @@ function Invoke-Safe {
     try {
         Write-Ui "$Description..." "INFO"
         & $ScriptBlock
-        Write-Ui "$Description: done." "OK"
+        Write-Ui "${Description}: done." "OK"
         return $true
     } catch {
-        Write-Ui "$Description: $($_.Exception.Message)" "ERR"
+        Write-Ui "${Description}: $($_.Exception.Message)" "ERR"
         return $false
     }
 }
@@ -148,7 +148,9 @@ function Import-IISModule {
 
 function Normalize-Url {
     param([string]$Url)
-    $u = ($Url ?? "").Trim()
+    $u = $Url
+    if ($null -eq $u) { $u = "" }
+    $u = $u.Trim()
     if ([string]::IsNullOrWhiteSpace($u)) { return $null }
 
     if ($u -notmatch '^\w+://') {
@@ -163,6 +165,12 @@ function Normalize-Url {
     } catch {
         throw "Invalid URL: $u"
     }
+}
+
+function Ensure-Collection {
+    param($Value)
+    if ($null -eq $Value) { return @() }
+    return $Value
 }
 
 # ----------------------------
@@ -448,7 +456,8 @@ function New-AssessmentReport {
     $html += "</ul>"
 
     $html += "<h3>Recent hotfixes</h3><pre>"
-    foreach ($hf in ($Patch.RecentHotfixes ?? @())) {
+    $recentHotfixes = Ensure-Collection $Patch.RecentHotfixes
+    foreach ($hf in $recentHotfixes) {
         $dt = if ($hf.InstalledOn) { $hf.InstalledOn.ToString("yyyy-MM-dd") } else { "unknown" }
         $html += ("{0,-12} {1,-12} {2}" -f $hf.HotFixID, $dt, $hf.Description)
     }
@@ -457,18 +466,20 @@ function New-AssessmentReport {
     $html += "<h2>IIS inventory</h2>"
     $html += "<p><b>WebAdministration module:</b> $($IIS.WebAdminModule)</p>"
 
-    if (($IIS.Sites ?? @()).Count -gt 0) {
+    $sites = Ensure-Collection $IIS.Sites
+    if ($sites.Count -gt 0) {
         $html += "<h3>Sites</h3><pre>"
-        foreach ($s in $IIS.Sites) {
+        foreach ($s in $sites) {
             $html += "$($s.Name) | $($s.State) | $($s.PhysicalPath)"
             $html += "  Bindings: $($s.Bindings)"
         }
         $html += "</pre>"
     }
 
-    if (($IIS.RiskFlags ?? @()).Count -gt 0) {
+    $riskFlags = Ensure-Collection $IIS.RiskFlags
+    if ($riskFlags.Count -gt 0) {
         $html += "<h3>Risk flags</h3><ul>"
-        foreach ($r in $IIS.RiskFlags) { $html += "<li>$r</li>" }
+        foreach ($r in $riskFlags) { $html += "<li>$r</li>" }
         $html += "</ul>"
     } else {
         $html += "<h3>Risk flags</h3><p>(none detected from global modules)</p>"
@@ -686,11 +697,13 @@ $script:BtnAssess.Add_Click({
         Invoke-Safe -Description "Collect patch status" -ScriptBlock {
             $script:LastPatch = Get-PatchStatus
             Write-Ui "OS: $($script:LastPatch.OSName) | Version $($script:LastPatch.OSVersion) | Build $($script:LastPatch.OSBuild) | UBR $($script:LastPatch.UBR)" "OK"
-            Write-Ui "Pending reboot: $($script:LastPatch.PendingReboot)" ($script:LastPatch.PendingReboot ? "WARN" : "OK")
+            $pendingLevel = if ($script:LastPatch.PendingReboot) { "WARN" } else { "OK" }
+            Write-Ui "Pending reboot: $($script:LastPatch.PendingReboot)" $pendingLevel
             Write-Ui "Windows Update service: $($script:LastPatch.WindowsUpdateSvc)" "INFO"
-            if (($script:LastPatch.RecentHotfixes ?? @()).Count -gt 0) {
+            $recentHotfixes = Ensure-Collection $script:LastPatch.RecentHotfixes
+            if ($recentHotfixes.Count -gt 0) {
                 Write-Ui "Recent hotfixes:" "INFO"
-                foreach ($hf in $script:LastPatch.RecentHotfixes) {
+                foreach ($hf in $recentHotfixes) {
                     $dt = if ($hf.InstalledOn) { $hf.InstalledOn } else { [datetime]::MinValue }
                     Write-Ui ("  {0}  {1:yyyy-MM-dd}  {2}" -f $hf.HotFixID, $dt, $hf.Description) "INFO"
                 }
@@ -702,19 +715,22 @@ $script:BtnAssess.Add_Click({
         Invoke-Safe -Description "Collect IIS inventory" -ScriptBlock {
             $script:LastIIS = Get-IISInventory
             Write-Ui "IIS appcmd: $($script:LastIIS.AppCmd)" "OK"
-            Write-Ui "WebAdministration module: $($script:LastIIS.WebAdminModule)" ($script:LastIIS.WebAdminModule ? "OK" : "WARN")
+            $webAdminLevel = if ($script:LastIIS.WebAdminModule) { "OK" } else { "WARN" }
+            Write-Ui "WebAdministration module: $($script:LastIIS.WebAdminModule)" $webAdminLevel
 
-            if (($script:LastIIS.Sites ?? @()).Count -gt 0) {
+            $sites = Ensure-Collection $script:LastIIS.Sites
+            if ($sites.Count -gt 0) {
                 Write-Ui "Sites:" "INFO"
-                foreach ($s in $script:LastIIS.Sites) {
+                foreach ($s in $sites) {
                     Write-Ui "  $($s.Name) | $($s.State) | $($s.PhysicalPath)" "INFO"
                     Write-Ui "    Bindings: $($s.Bindings)" "INFO"
                 }
             }
 
-            if (($script:LastIIS.RiskFlags ?? @()).Count -gt 0) {
+            $riskFlags = Ensure-Collection $script:LastIIS.RiskFlags
+            if ($riskFlags.Count -gt 0) {
                 Write-Ui "Risk flags:" "WARN"
-                foreach ($r in $script:LastIIS.RiskFlags) { Write-Ui "  - $r" "WARN" }
+                foreach ($r in $riskFlags) { Write-Ui "  - $r" "WARN" }
             } else {
                 Write-Ui "Risk flags: none detected from global modules." "OK"
             }
