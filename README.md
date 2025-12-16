@@ -229,15 +229,6 @@ GitHub Actions runs:
   * you will test apps after changes,
   * you will use a reverse proxy/WAF for edge-level protections.
 
----
-
-## Roadmap ideas (optional)
-
-* “Low/Medium/High risk” grouped hardening categories
-* Per-site configuration targeting instead of global-only
-* Baseline comparison (before/after diff)
-* Export report to JSON for SIEM ingestion
-* Add more request filtering rules (file extensions, double-escaping options, etc.) behind toggles
 
 ---
 
